@@ -1,5 +1,7 @@
 [package]
 name = "admin_account_audit"
+authors = ["TeamDman"]
+description = "Find non-admin accounts that have access that should be done with admin accounts in the Azure Portal."
 version = "0.1.0"
 edition = "2024"
 

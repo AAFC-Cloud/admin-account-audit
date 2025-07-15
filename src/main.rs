@@ -29,7 +29,7 @@ use work::ParallelFallibleWorkQueue;
 
 #[derive(Parser)]
 #[command(name = "admin_account_audit")]
-#[command(about = "Audit admin account role assignments in Azure")]
+#[command(about = "Audit admin account role assignments in Azure\nFrom TeamDman, with love ❤️")]
 struct Cli {
     /// Output path for the JSON results
     output_path: PathBuf,
