@@ -29,7 +29,7 @@ struct Cli {
     /// Output path for the JSON results
     output_path: PathBuf,
     
-    /// Overwrite existing file if it exists
+    /// Clobber the output file if it already exists
     #[arg(long)]
     overwrite_existing: bool,
 }
