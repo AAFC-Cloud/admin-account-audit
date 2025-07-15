@@ -1,19 +1,24 @@
 pub mod work;
+
 use clap::Parser;
 use cloud_terrastodon_azure::prelude::Group;
+use cloud_terrastodon_azure::prelude::PrincipalId;
 use cloud_terrastodon_azure::prelude::RoleAssignment;
 use cloud_terrastodon_azure::prelude::RoleDefinition;
+use cloud_terrastodon_azure::prelude::RoleDefinitionId;
 use cloud_terrastodon_azure::prelude::Scope;
 use cloud_terrastodon_azure::prelude::User;
 use cloud_terrastodon_azure::prelude::fetch_all_role_assignments;
 use cloud_terrastodon_azure::prelude::fetch_all_role_definitions;
 use cloud_terrastodon_azure::prelude::fetch_all_security_groups;
 use cloud_terrastodon_azure::prelude::fetch_all_users;
+use cloud_terrastodon_azure::prelude::fetch_group_members;
+use cloud_terrastodon_azure::prelude::fetch_group_owners;
+use cloud_terrastodon_azure::prelude::uuid::Uuid;
 use itertools::Itertools;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::ops::Deref;
 use std::ops::Not;
 use std::path::PathBuf;
 use tokio::try_join;
@@ -28,7 +33,7 @@ use work::ParallelFallibleWorkQueue;
 struct Cli {
     /// Output path for the JSON results
     output_path: PathBuf,
-    
+
     /// Clobber the output file if it already exists
     #[arg(long)]
     overwrite_existing: bool,
@@ -63,9 +68,9 @@ pub struct Audit {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    
+
     let cli = Cli::parse();
-    
+
     // Check if output file exists and handle overwrite logic
     if cli.output_path.exists() && !cli.overwrite_existing {
         return Err(eyre::eyre!(
@@ -73,7 +78,8 @@ async fn main() -> eyre::Result<()> {
             cli.output_path
         ));
     }
-    
+
+    // Initialize tracing subscriber for logging
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
@@ -84,12 +90,16 @@ async fn main() -> eyre::Result<()> {
         .without_time()
         .init();
 
+    // Fetch upfront data in parallel
+    info!("Fetching role assignments, definitions, users, and groups... this may take a moment");
     let (role_assignments, role_definitions, users, groups) = try_join!(
         fetch_all_role_assignments(),
         fetch_all_role_definitions(),
         fetch_all_users(),
         fetch_all_security_groups(),
     )?;
+
+    // Reshape the data for faster lookups
     let non_admin_accounts = users
         .iter()
         .filter_map(|user| {
@@ -99,7 +109,7 @@ async fn main() -> eyre::Result<()> {
                 .starts_with("admin.")
                 .not()
             {
-                Some((user.id.deref().clone(), user))
+                Some((PrincipalId::UserId(user.id), user))
             } else {
                 None
             }
@@ -111,12 +121,44 @@ async fn main() -> eyre::Result<()> {
         .collect::<HashMap<_, _>>();
     let groups = groups
         .into_iter()
-        .map(|group| (*group.id.clone(), group))
+        .map(|group| (*group.id, group))
         .collect::<HashMap<_, _>>();
-    let mut groups_to_fetch = Vec::new();
 
+    // Get non-admin users with role assignments
+    let non_admin_users_with_role_assignments = get_non_admin_users_with_role_assignments(
+        &groups,
+        &role_assignments,
+        &role_definitions,
+        &non_admin_accounts,
+    )
+    .await?;
+
+    // Get non-admin group owners
+    let non_admin_group_owners = get_non_admin_group_owners(&groups, &non_admin_accounts).await?;
+
+    // Create audit structure
+    let audit = Audit {
+        role_assignments: non_admin_users_with_role_assignments,
+        group_owners: non_admin_group_owners,
+    };
+
+    // Write results to JSON file
+    let json_output = serde_json::to_string_pretty(&audit)?;
+    fs::write(&cli.output_path, json_output)?;
+    info!("Results written to {:?}", cli.output_path);
+
+    Ok(())
+}
+
+pub async fn get_non_admin_users_with_role_assignments(
+    groups: &HashMap<Uuid, Group>,
+    role_assignments: &[RoleAssignment],
+    role_definitions: &HashMap<RoleDefinitionId, RoleDefinition>,
+    non_admin_accounts: &HashMap<PrincipalId, &User>,
+) -> eyre::Result<Vec<RoleAssignmentDiscovery>> {
     let mut non_admin_users_with_role_assignments = Vec::new();
-    for role_assignment in &role_assignments {
+    let mut groups_to_fetch = Vec::new();
+    for role_assignment in role_assignments {
         let Some(role_definition) = role_definitions.get(&role_assignment.role_definition_id)
         else {
             warn!(
@@ -166,13 +208,9 @@ async fn main() -> eyre::Result<()> {
     let mut work = ParallelFallibleWorkQueue::new("Fetching group members", 10);
     let mut group_members = HashMap::new();
 
-    for group_id in groups_to_fetch
-        .iter()
-        .map(|(group, ..)| group.id.clone())
-        .unique()
-    {
+    for group_id in groups_to_fetch.iter().map(|(group, ..)| group.id).unique() {
         work.enqueue(async move {
-            let members = cloud_terrastodon_azure::prelude::fetch_group_members(group_id).await?;
+            let members = fetch_group_members(group_id).await?;
             Ok((group_id, members))
         });
     }
@@ -204,7 +242,6 @@ async fn main() -> eyre::Result<()> {
                 });
             }
         }
-
     }
 
     info!(
@@ -212,15 +249,21 @@ async fn main() -> eyre::Result<()> {
         non_admin_users_with_role_assignments.len(),
         role_assignments.len()
     );
+    Ok(non_admin_users_with_role_assignments)
+}
 
+pub async fn get_non_admin_group_owners(
+    groups: &HashMap<Uuid, Group>,
+    non_admin_accounts: &HashMap<PrincipalId, &User>,
+) -> eyre::Result<Vec<GroupOwnerDiscovery>> {
     info!("Fetching group owners...");
     let mut owner_work = ParallelFallibleWorkQueue::new("Fetching group owners", 10);
     let mut group_owners = HashMap::new();
 
-    for (_group_id, group) in &groups {
-        let group_id_clone = group.id.clone();
+    for group in groups.values() {
+        let group_id_clone = group.id;
         owner_work.enqueue(async move {
-            let owners = cloud_terrastodon_azure::prelude::fetch_group_owners(group_id_clone).await?;
+            let owners = fetch_group_owners(group_id_clone).await?;
             Ok((group_id_clone, owners))
         });
     }
@@ -230,7 +273,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     let mut non_admin_group_owners = Vec::new();
-    for (_group_id, group) in &groups {
+    for group in groups.values() {
         let Some(owners) = group_owners.get(&group.id) else {
             continue;
         };
@@ -238,8 +281,7 @@ async fn main() -> eyre::Result<()> {
             if let Some(user) = non_admin_accounts.get(&owner.id()) {
                 info!(
                     "Found non-admin group owner: {:?} owns group {:?}",
-                    user.display_name,
-                    group.display_name
+                    user.display_name, group.display_name
                 );
                 non_admin_group_owners.push(GroupOwnerDiscovery {
                     group: group.clone(),
@@ -253,18 +295,5 @@ async fn main() -> eyre::Result<()> {
         "Total non-admin group owners found: {}",
         non_admin_group_owners.len()
     );
-
-    // Create audit structure
-    let audit = Audit {
-        role_assignments: non_admin_users_with_role_assignments,
-        group_owners: non_admin_group_owners,
-    };
-
-
-    // Write results to JSON file
-    let json_output = serde_json::to_string_pretty(&audit)?;
-    fs::write(&cli.output_path, json_output)?;
-    info!("Results written to {:?}", cli.output_path);
-
-    Ok(())
+    Ok(non_admin_group_owners)
 }
