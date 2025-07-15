@@ -35,17 +35,29 @@ struct Cli {
 }
 
 #[derive(Serialize)]
-pub struct Discovery {
+pub struct RoleAssignmentDiscovery {
     pub user: User,
-    pub source: Source,
+    pub source: RoleAssignmentSource,
     pub role_assignment: RoleAssignment,
     pub role_definition: RoleDefinition,
 }
 
 #[derive(Serialize)]
-pub enum Source {
+pub struct GroupOwnerDiscovery {
+    pub group: Group,
+    pub owner: User,
+}
+
+#[derive(Serialize)]
+pub enum RoleAssignmentSource {
     Direct,
     Group(Group),
+}
+
+#[derive(Serialize)]
+pub struct Audit {
+    pub role_assignments: Vec<RoleAssignmentDiscovery>,
+    pub group_owners: Vec<GroupOwnerDiscovery>,
 }
 
 #[tokio::main]
@@ -120,9 +132,9 @@ async fn main() -> eyre::Result<()> {
                 role_definition.display_name,
                 role_assignment.scope.expanded_form()
             );
-            non_admin_users_with_role_assignments.push(Discovery {
+            non_admin_users_with_role_assignments.push(RoleAssignmentDiscovery {
                 user: (*user).clone(),
-                source: Source::Direct,
+                source: RoleAssignmentSource::Direct,
                 role_assignment: role_assignment.clone(),
                 role_definition: role_definition.clone(),
             });
@@ -184,9 +196,9 @@ async fn main() -> eyre::Result<()> {
                     role_definition.display_name,
                     role_assignment.scope.expanded_form()
                 );
-                non_admin_users_with_role_assignments.push(Discovery {
+                non_admin_users_with_role_assignments.push(RoleAssignmentDiscovery {
                     user: (*user).clone(),
-                    source: Source::Group(group.clone()),
+                    source: RoleAssignmentSource::Group(group.clone()),
                     role_assignment: role_assignment.clone(),
                     role_definition: role_definition.clone(),
                 });
@@ -201,8 +213,56 @@ async fn main() -> eyre::Result<()> {
         role_assignments.len()
     );
 
+    info!("Fetching group owners...");
+    let mut owner_work = ParallelFallibleWorkQueue::new("Fetching group owners", 10);
+    let mut group_owners = HashMap::new();
+
+    for (_group_id, group) in &groups {
+        let group_id_clone = group.id.clone();
+        owner_work.enqueue(async move {
+            let owners = cloud_terrastodon_azure::prelude::fetch_group_owners(group_id_clone).await?;
+            Ok((group_id_clone, owners))
+        });
+    }
+    for row in owner_work.join().await? {
+        let (group_id, owners) = row;
+        group_owners.insert(group_id, owners);
+    }
+
+    let mut non_admin_group_owners = Vec::new();
+    for (_group_id, group) in &groups {
+        let Some(owners) = group_owners.get(&group.id) else {
+            continue;
+        };
+        for owner in owners {
+            if let Some(user) = non_admin_accounts.get(&owner.id()) {
+                info!(
+                    "Found non-admin group owner: {:?} owns group {:?}",
+                    user.display_name,
+                    group.display_name
+                );
+                non_admin_group_owners.push(GroupOwnerDiscovery {
+                    group: group.clone(),
+                    owner: (*user).clone(),
+                });
+            }
+        }
+    }
+
+    info!(
+        "Total non-admin group owners found: {}",
+        non_admin_group_owners.len()
+    );
+
+    // Create audit structure
+    let audit = Audit {
+        role_assignments: non_admin_users_with_role_assignments,
+        group_owners: non_admin_group_owners,
+    };
+
+
     // Write results to JSON file
-    let json_output = serde_json::to_string_pretty(&non_admin_users_with_role_assignments)?;
+    let json_output = serde_json::to_string_pretty(&audit)?;
     fs::write(&cli.output_path, json_output)?;
     info!("Results written to {:?}", cli.output_path);
 
