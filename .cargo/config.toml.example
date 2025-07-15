@@ -1,0 +1,8 @@
+
+[patch.crates-io]
+cloud_terrastodon_azure = { path = "../../../cloud-terrastodon/crates/azure" }
+cloud_terrastodon_azure_devops = { path = "../../../cloud-terrastodon/crates/azure_devops" }
+cloud_terrastodon_command = { path = "../../../cloud-terrastodon/crates/command" }
+cloud_terrastodon_hcl = { path = "../../../cloud-terrastodon/crates/hcl" }
+cloud_terrastodon_pathing = { path = "../../../cloud-terrastodon/crates/pathing" }
+cloud_terrastodon_user_input = { path = "../../../cloud-terrastodon/crates/user_input" }

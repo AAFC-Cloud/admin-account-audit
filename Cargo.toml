@@ -1,0 +1,17 @@
+[package]
+name = "admin_account_audit"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.41", features = ["derive"] }
+cloud_terrastodon_azure = "0.21.0"
+cloud_terrastodon_user_input = "0.21.0"
+color-eyre = "0.6.5"
+eyre = "0.6.12"
+itertools = "0.14.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.140"
+tokio = { version = "1.46.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
