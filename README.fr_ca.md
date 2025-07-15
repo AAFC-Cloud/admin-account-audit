@@ -14,6 +14,24 @@
 - Résultats exportés au format JSON
 - Aide à identifier les potentielles élévations de privilèges
 
+## Installation
+
+**Windows :**
+
+1. Téléchargez la dernière version Windows depuis la [page des releases](https://github.com/AAFC-Cloud/admin-account-audit/releases).
+2. Décompressez et placez `admin_account_audit.exe` dans un dossier inclus dans votre `PATH`.
+
+**Autres systèmes d’exploitation :**
+
+Actuellement, seuls des binaires Windows sont fournis. Cependant, vous pouvez compiler à partir des sources sur Linux ou macOS avec Rust et Cargo :
+
+```sh
+git clone https://github.com/AAFC-Cloud/admin-account-audit.git
+cd admin-account-audit
+cargo build --release
+```
+Le binaire sera dans `target/release/`.
+
 ## Utilisation
 
 ```sh

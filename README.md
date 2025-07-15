@@ -14,6 +14,25 @@
 - Outputs results as a JSON file
 - Helps organizations identify potential privilege escalations
 
+
+## Installation
+
+**Windows:**
+
+1. Download the latest Windows binary from the [releases page](https://github.com/AAFC-Cloud/admin-account-audit/releases).
+2. Unzip and place `admin_account_audit.exe` somewhere in your `PATH`.
+
+**Other operating systems:**
+
+Currently, only Windows binaries are provided. However, you can build from source on Linux or macOS using Rust and Cargo:
+
+```sh
+git clone https://github.com/AAFC-Cloud/admin-account-audit.git
+cd admin-account-audit
+cargo build --release
+```
+The resulting binary will be in `target/release/`.
+
 ## Usage
 
 ```sh
